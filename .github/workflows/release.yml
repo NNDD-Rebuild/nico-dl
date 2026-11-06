@@ -1,0 +1,60 @@
+name: release
+
+on:
+  release:
+    types:
+      - published
+
+jobs:
+  build-win:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: install-mingw
+        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+
+      - name: test
+        run: go test ./...
+
+      - name: build
+        run: ./build.sh
+
+      - name: package
+        run: |
+          tag="${{ github.ref_name }}"
+          name="nico-dl-${tag}-windows-x64"
+          mkdir "$name"
+          cp dist/nico-dl.exe dist/nico-dl-gui.exe README.md "$name/"
+          zip -r "$name.zip" "$name"
+          echo "ASSET=$name.zip" >> "$GITHUB_ENV"
+
+      - name: upload
+        run: gh release upload "${{ github.ref_name }}" "$ASSET" --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: generate-notes
+        run: |
+          # 正式版 (v1.2.3) は直前の正式版から、ベータ (v1.2.3-beta.1) は直前のタグからの差分にする
+          if [[ "${{ github.ref_name }}" == *-* ]]; then
+            prev=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)
+          else
+            prev=$(git describe --tags --abbrev=0 --exclude '*-*' HEAD^ 2>/dev/null || true)
+          fi
+          # 変更履歴には feat / fix / refactor だけを載せる
+          range=HEAD
+          if [ -n "$prev" ]; then range="$prev..HEAD"; fi
+          notes=$(git log -E --grep='^(feat|fix|refactor)(\([^)]*\))?!?:' "$range" --pretty=format:'- %s' --no-merges)
+          gh release edit "${{ github.ref_name }}" --notes "$notes"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
